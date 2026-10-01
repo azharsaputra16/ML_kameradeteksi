@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Edge AI Inventory Scanner - Praktikum 4</title>
+
+  <!-- LOAD TENSORFLOW & COCO-SSD VIA UNPKG CDN (STABIL & BEBAS BLOKIR) -->
+  <script src="https://unpkg.com/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <script src="https://unpkg.com/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+
+  <style>
+    :root {
+      --bg-main: #f3f4f6;
+      --card-bg: #ffffff;
+      --primary: #2563eb;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --border: #e2e8f0;
+      --text-main: #1e293b;
+      --text-muted: #64748b;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      background: var(--bg-main);
+      margin: 0;
+      padding: 20px;
+      color: var(--text-main);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      border: 1px solid var(--border);
+    }
+
+    h2 {
+      margin-top: 0;
+      color: var(--text-main);
+    }
+
+    #status-box {
+      background: #e2e8f0;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      font-weight: bold;
+    }
+
+    .main-layout {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    @media (min-width: 768px) {
+      .main-layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    video {
+      width: 100%;
+      display: block;
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 15px;
+    }
+
+    button {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      color: white;
+      transition: background 0.2s;
+    }
+
+    .btn-cam { background: var(--primary); }
+    .btn-ai-start { background: var(--success); }
+    .btn-ai-stop { background: var(--danger); }
+    .btn-export { background: #0284c7; }
+
+    button:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    /* UI Section untuk Log Deteksi Real-Time (Sesuai Modul 4) */
+    #data-section {
+      background: var(--card-bg);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      min-height: 250px;
+      max-height: 400px;
+      overflow: hidden;
+    }
+
+    #data-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: bold;
+      font-size: 14px;
+      color: var(--text-main);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      justify-content: space-between;
+      background: #f8fafc;
+    }
+
+    #data-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    .log-item {
+      padding: 10px 12px;
+      background: #f8fafc;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      border-left: 4px solid var(--primary);
+      font-size: 13px;
+    }
+
+    .log-time {
+      color: var(--text-muted);
+      font-size: 11px;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .log-items {
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 30px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h2>Edge AI Inventory Scanner (Modul 4)</h2>
+    <div id="status-box">Status: Inisialisasi Sistem...</div>
+
+    <div class="main-layout">
+      <!-- Sisi Kiri: Video & Kamera -->
+      <div>
+        <div class="video-wrapper">
+          <video id="webcam" autoplay playsinline muted></video>
+          <canvas id="output_canvas"></canvas>
+        </div>
+
+        <div class="btn-group">
+          <button id="btnCam" class="btn-cam" onclick="toggleCamera()">Start Camera</button>
+          <button id="btnAI" class="btn-ai-start" onclick="toggleAI()" disabled>Start AI</button>
+          <button id="btnExport" class="btn-export" onclick="exportLogsToCSV()">Export CSV</button>
+        </div>
+      </div>
+
+      <!-- Sisi Kanan: Real-time Log Section -->
+      <div id="data-section">
+        <div id="data-header">
+          <span>Detected Objects Log</span>
+          <span id="log-count">0 items</span>
+        </div>
+        <div id="data-list">
+          <div class="empty-state">Menunggu deteksi objek...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FIREBASE MODULE SCRIPT -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { 
+      getFirestore, collection, addDoc, serverTimestamp, 
+      query, orderBy, limit, onSnapshot 
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+    // 1. GANTI DENGAN CONFIG FIREBASE UNTUK PROJECT KAMU
+    const firebaseConfig = {
+  apiKey: "AIzaSyC0lp-2RULssr_RPXFGZ-y6v2Mq_MIRdss",
+  authDomain: "expense-tracker-azhar-4f8a4.firebaseapp.com",
+  projectId: "expense-tracker-azhar-4f8a4",
+  storageBucket: "expense-tracker-azhar-4f8a4.firebasestorage.app",
+  messagingSenderId: "308150239506",
+  appId: "1:308150239506:web:2b0c8eb29bd5e83e50b3cb"
+};
+
+    let db = null;
+    let logsCacheForCSV = []; // Menyimpan log untuk fitur Export CSV
+
+    try {
+      const app = initializeApp(firebaseConfig);
+      db = getFirestore(app);
+      console.log("✅ Firebase Firestore Terhubung!");
+    } catch (err) {
+      console.error("❌ Gagal Terhubung Firebase:", err);
+    }
+
+    // Variabel Global
+    let model = null;
+    let videoStream = null;
+    let isAIDetecting = false;
+    let isCameraOn = false;
+
+    // Throttling Variable (3000 ms = 3 Detik)
+    let lastSaveTime = 0;
+    const SAVE_THROTTLE_MS = 3000;
+
+    const TARGET_CLASSES = ['mouse', 'keyboard', 'cell phone', 'book', 'scissors', 'laptop', 'person'];
+
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('output_canvas');
+    const ctx = canvas.getContext('2d');
+    const statusBox = document.getElementById('status-box');
+    const btnAI = document.getElementById('btnAI');
+    const btnCam = document.getElementById('btnCam');
+
+    // 2. Real-time Listener dengan onSnapshot (Modul 4 Section 3)
+    function listenToDatabase() {
+      if (!db) return;
+
+      const q = query(
+        collection(db, "inventory_logs"),
+        orderBy("timestamp", "desc"),
+        limit(10)
+      );
+
+      onSnapshot(q, (snapshot) => {
+        const dataList = document.getElementById("data-list");
+        dataList.innerHTML = ""; // Kosongkan list sebelum render ulang
+        let count = 0;
+        logsCacheForCSV = [];
+
+        if (snapshot.empty) {
+          dataList.innerHTML = '<div class="empty-state">Belum ada data deteksi tersimpan</div>';
+          document.getElementById("log-count").textContent = "0 items";
+          return;
+        }
+
+        snapshot.docs.forEach((doc) => {
+          count++;
+          const data = doc.data();
+          logsCacheForCSV.push(data);
+
+          // Format Waktu
+          let timeStr = "Baru saja";
+          if (data.timestamp) {
+            const dateObj = data.timestamp.toDate();
+            timeStr = dateObj.toLocaleTimeString("id-ID");
+          }
+
+          // Buat Elemen Log UI
+          const div = document.createElement("div");
+          div.className = "log-item";
+          div.innerHTML = `
+            <span class="log-time">⏱ ${timeStr} | ID: ${data.device_id || 'BROWSER-TEST'}</span>
+            <div class="log-items">📦 ${data.items}</div>
+          `;
+          dataList.appendChild(div);
+        });
+
+        document.getElementById("log-count").textContent = `${count} items`;
+      }, (error) => {
+        console.error("Error onSnapshot:", error);
+      });
+    }
+
+    // 3. Load Model AI
+    async function loadModel() {
+      try {
+        statusBox.textContent = "Status: Memuat Model AI (COCO-SSD)... Mohon tunggu.";
+        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        statusBox.textContent = "Status: Model AI & Real-time Database Siap!";
+        console.log("✅ Model COCO-SSD berhasil dimuat.");
+        checkReadyState();
+      } catch (err) {
+        console.error("Gagal memuat model:", err);
+        statusBox.textContent = "Status: Gagal Memuat Model AI!";
+      }
+    }
+
+    function checkReadyState() {
+      btnAI.disabled = !(model && isCameraOn);
+    }
+
+    // 4. Kontrol Kamera
+    window.toggleCamera = async function() {
+      if (!isCameraOn) {
+        try {
+          videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+          video.srcObject = videoStream;
+          video.onloadedmetadata = () => {
+            isCameraOn = true;
+            btnCam.textContent = "Stop Camera";
+            btnCam.style.background = "var(--danger)";
+            checkReadyState();
+          };
+        } catch (err) {
+          alert("Gagal mengakses kamera!");
+        }
+      } else {
+        if (isAIDetecting) window.toggleAI();
+        videoStream.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+        isCameraOn = false;
+        btnCam.textContent = "Start Camera";
+        btnCam.style.background = "var(--primary)";
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        checkReadyState();
+      }
+    };
+
+    // 5. Kontrol Start/Stop AI
+    window.toggleAI = function() {
+      if (!isAIDetecting) {
+        isAIDetecting = true;
+        btnAI.textContent = "Stop AI";
+        btnAI.className = "btn-ai-stop";
+        detectLoop();
+      } else {
+        isAIDetecting = false;
+        btnAI.textContent = "Start AI";
+        btnAI.className = "btn-ai-start";
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    };
+
+    // 6. Menyimpan Hasil Deteksi dengan Throttling (Modul 4 Section 1 & 2)
+    async function saveToDatabase(detectedTargets) {
+      if (!db || detectedTargets.length === 0) return;
+
+      try {
+        // Format string items: misal "laptop (95%), person (87%)"
+        const itemsString = detectedTargets
+          .map(d => `${d.class} (${d.confidence}%)`)
+          .join(", ");
+
+        const payload = {
+          items: itemsString,
+          count: detectedTargets.length,
+          device_id: "BROWSER-TEST",
+          timestamp: serverTimestamp()
+        };
+
+        await addDoc(collection(db, "inventory_logs"), payload);
+        console.log("💾 Data tersimpan ke Firestore:", payload);
+      } catch (err) {
+        console.error("Gagal menyimpan ke database:", err);
+      }
+    }
+
+    // 7. Detection Loop
+    async function detectLoop() {
+      if (!isAIDetecting || !isCameraOn) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const predictions = await model.detect(video);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const detectedTargets = [];
+
+      predictions.forEach(pred => {
+        const [x, y, w, h] = pred.bbox;
+        const isTarget = TARGET_CLASSES.includes(pred.class);
+        const confidence = pred.score;
+
+        // Draw Bounding Box
+        if (isTarget && confidence >= 0.60) {
+          const confPercent = (confidence * 100).toFixed(0);
+          const label = `${pred.class} ${confPercent}%`;
+
+          ctx.strokeStyle = "#16a34a";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x, y, w, h);
+
+          ctx.fillStyle = "#16a34a";
+          ctx.font = "bold 14px sans-serif";
+          const textWidth = ctx.measureText(label).width;
+          ctx.fillRect(x, y > 25 ? y - 25 : y, textWidth + 10, 25);
+
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(label, x + 5, y > 25 ? y - 7 : y + 17);
+
+          // Masukkan ke array deteksi
+          detectedTargets.push({
+            class: pred.class,
+            confidence: parseFloat((confidence * 100).toFixed(2))
+          });
+        }
+      });
+
+      // THROTTLING SIMPAN DATABASE (Tiap 3 Detik)
+      if (detectedTargets.length > 0 && (Date.now() - lastSaveTime > SAVE_THROTTLE_MS)) {
+        saveToDatabase(detectedTargets);
+        lastSaveTime = Date.now();
+      }
+
+      requestAnimationFrame(detectLoop);
+    }
+
+    // 8. Tantangan Bonus Modul 4: Fitur Export Log ke CSV
+    window.exportLogsToCSV = function() {
+      if (logsCacheForCSV.length === 0) {
+        alert("Belum ada log deteksi untuk diekspor!");
+        return;
+      }
+
+      let csvContent = "data:text/csv;charset=utf-8,Waktu,Jumlah,Items,Device_ID\n";
+      
+      logsCacheForCSV.forEach(row => {
+        let timeStr = row.timestamp ? row.timestamp.toDate().toLocaleString("id-ID") : "-";
+        csvContent += `"${timeStr}",${row.count},"${row.items}","${row.device_id}"\n`;
+      });
+
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Inventory_Logs_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
+    // 9. Inisialisasi Aplikasi (Modul 4 Section 5)
+    function initApp() {
+      console.log("Memulai inisialisasi aplikasi...");
+      listenToDatabase();
+      loadModel();
+      console.log("Inisialisasi selesai!");
+    }
+
+    // Jalankan saat DOM Siap
+    document.addEventListener("DOMContentLoaded", initApp);
+  </script>
+</body>
+</html>
